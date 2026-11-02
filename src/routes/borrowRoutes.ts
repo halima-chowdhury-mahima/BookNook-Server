@@ -1,6 +1,6 @@
 
 import { Router, Response } from "express";
-import { ObjectId } from "mongodb";
+import { ObjectId, type ClientSession } from "mongodb";
 
 import { getDB, getMongoClient } from "../config/db.js";
 import { Book } from "../types/book.js";
@@ -12,6 +12,9 @@ import {
 
 const router = Router();
 
+const BOOK_COLLECTION = "books";
+const BORROW_COLLECTION = "borrows";
+
 // ==========================================
 // POST: Borrow a book (JWT Protected)
 // ==========================================
@@ -20,12 +23,15 @@ router.post(
   "/",
   verifyToken,
   async (req: AuthenticatedRequest, res: Response) => {
-    const session = getMongoClient().startSession();
+    let session: ClientSession | undefined;
 
     try {
       const { bookId } = req.body;
 
-      if (!bookId || !ObjectId.isValid(bookId)) {
+      if (
+        typeof bookId !== "string" ||
+        !ObjectId.isValid(bookId)
+      ) {
         res.status(400).json({
           success: false,
           message: "A valid book ID is required",
@@ -42,15 +48,16 @@ router.post(
       }
 
       const db = getDB();
-      const books = db.collection<Book>("books");
-      const borrows = db.collection<Borrow>("borrows");
+      const books = db.collection<Book>(BOOK_COLLECTION);
+      const borrows = db.collection<Borrow>(BORROW_COLLECTION);
+
+      session = getMongoClient().startSession();
 
       let createdBorrow: Borrow | null = null;
 
       await session.withTransaction(async () => {
         const objectBookId = new ObjectId(bookId);
 
-        // Check whether the book exists
         const book = await books.findOne(
           { _id: objectBookId },
           { session }
@@ -87,7 +94,6 @@ router.post(
           status: "active",
         };
 
-        // Save borrow record
         const result = await borrows.insertOne(
           borrowRecord,
           { session }
@@ -147,7 +153,7 @@ router.post(
         message: "Failed to borrow book",
       });
     } finally {
-      await session.endSession();
+      await session?.endSession();
     }
   }
 );
@@ -172,7 +178,7 @@ router.get(
       const db = getDB();
 
       const borrows = await db
-        .collection<Borrow>("borrows")
+        .collection<Borrow>(BORROW_COLLECTION)
         .find({
           userId: req.user.id,
         })
@@ -203,7 +209,7 @@ router.delete(
   "/:id",
   verifyToken,
   async (req: AuthenticatedRequest, res: Response) => {
-    const session = getMongoClient().startSession();
+    let session: ClientSession | undefined;
 
     try {
       const borrowId = String(req.params.id);
@@ -225,8 +231,10 @@ router.delete(
       }
 
       const db = getDB();
-      const borrows = db.collection<Borrow>("borrows");
-      const books = db.collection<Book>("books");
+      const borrows = db.collection<Borrow>(BORROW_COLLECTION);
+      const books = db.collection<Book>(BOOK_COLLECTION);
+
+      session = getMongoClient().startSession();
 
       await session.withTransaction(async () => {
         // Find only this user's active borrow
@@ -241,6 +249,35 @@ router.delete(
 
         if (!borrow) {
           throw new Error("BORROW_NOT_FOUND");
+        }
+
+        // Confirm the book exists
+        const book = await books.findOne(
+          { _id: borrow.bookId },
+          { session }
+        );
+
+        if (!book) {
+          throw new Error("BOOK_NOT_FOUND");
+        }
+
+        // Prevent available copies from exceeding total copies
+        const stockResult = await books.updateOne(
+          {
+            _id: borrow.bookId,
+            $expr: {
+              $lt: ["$availableCopies", "$totalCopies"],
+            },
+          },
+          {
+            $inc: { availableCopies: 1 },
+            $set: { updatedAt: new Date() },
+          },
+          { session }
+        );
+
+        if (stockResult.modifiedCount !== 1) {
+          throw new Error("STOCK_LIMIT_REACHED");
         }
 
         // Mark borrow as returned
@@ -261,20 +298,6 @@ router.delete(
 
         if (returnResult.modifiedCount !== 1) {
           throw new Error("RETURN_FAILED");
-        }
-
-        // Increase available copies
-        const stockResult = await books.updateOne(
-          { _id: borrow.bookId },
-          {
-            $inc: { availableCopies: 1 },
-            $set: { updatedAt: new Date() },
-          },
-          { session }
-        );
-
-        if (stockResult.matchedCount !== 1) {
-          throw new Error("BOOK_NOT_FOUND");
         }
       });
 
@@ -307,12 +330,23 @@ router.delete(
         return;
       }
 
+      if (
+        error instanceof Error &&
+        error.message === "STOCK_LIMIT_REACHED"
+      ) {
+        res.status(409).json({
+          success: false,
+          message: "Book stock is already at its maximum",
+        });
+        return;
+      }
+
       res.status(500).json({
         success: false,
         message: "Failed to return book",
       });
     } finally {
-      await session.endSession();
+      await session?.endSession();
     }
   }
 );
