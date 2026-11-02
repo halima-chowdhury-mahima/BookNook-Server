@@ -4,12 +4,20 @@ import { ObjectId } from "mongodb";
 
 import { getDB } from "../config/db.js";
 import { Book } from "../types/book.js";
+import { Borrow } from "../types/borrow.js";
 import {
   verifyToken,
   AuthenticatedRequest,
 } from "../middleware/authMiddleware.js";
 
 const router = Router();
+
+const BOOK_COLLECTION = "books";
+const BORROW_COLLECTION = "borrows";
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // ==========================================
 // GET: Get all books
@@ -19,16 +27,18 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const db = getDB();
 
-    const search = req.query.search?.toString() || "";
-    const category = req.query.category?.toString() || "";
-    const limit = Number(req.query.limit) || 0;
+    const search = req.query.search?.toString().trim() || "";
+    const category = req.query.category?.toString().trim() || "";
+    const rawLimit = Number(req.query.limit);
 
     const filter: Record<string, unknown> = {};
 
     if (search) {
+      const safeSearch = escapeRegex(search);
+
       filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
+        { title: { $regex: safeSearch, $options: "i" } },
+        { author: { $regex: safeSearch, $options: "i" } },
       ];
     }
 
@@ -36,12 +46,13 @@ router.get("/", async (req: Request, res: Response) => {
       filter.category = category;
     }
 
-    let query = db.collection<Book>("books").find(filter);
+    let query = db
+      .collection<Book>(BOOK_COLLECTION)
+      .find(filter)
+      .sort({ createdAt: -1 });
 
-    query = query.sort({ createdAt: -1 });
-
-    if (limit > 0) {
-      query = query.limit(Math.min(limit, 100));
+    if (Number.isFinite(rawLimit) && rawLimit > 0) {
+      query = query.limit(Math.min(Math.floor(rawLimit), 100));
     }
 
     const books = await query.toArray();
@@ -79,7 +90,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 
     const db = getDB();
 
-    const book = await db.collection<Book>("books").findOne({
+    const book = await db.collection<Book>(BOOK_COLLECTION).findOne({
       _id: new ObjectId(id),
     });
 
@@ -126,11 +137,16 @@ router.post(
       } = req.body;
 
       if (
-        !title?.trim() ||
-        !author?.trim() ||
-        !category?.trim() ||
-        !description?.trim() ||
-        !image?.trim() ||
+        typeof title !== "string" ||
+        !title.trim() ||
+        typeof author !== "string" ||
+        !author.trim() ||
+        typeof category !== "string" ||
+        !category.trim() ||
+        typeof description !== "string" ||
+        !description.trim() ||
+        typeof image !== "string" ||
+        !image.trim() ||
         !Number.isInteger(Number(totalCopies)) ||
         Number(totalCopies) < 1
       ) {
@@ -163,7 +179,7 @@ router.post(
       };
 
       const result = await db
-        .collection<Book>("books")
+        .collection<Book>(BOOK_COLLECTION)
         .insertOne(newBook);
 
       res.status(201).json({
@@ -213,8 +229,7 @@ router.patch(
       }
 
       const db = getDB();
-
-      const collection = db.collection<Book>("books");
+      const collection = db.collection<Book>(BOOK_COLLECTION);
 
       const existingBook = await collection.findOne({
         _id: new ObjectId(id),
@@ -389,11 +404,44 @@ router.delete(
       }
 
       const db = getDB();
+      const bookId = new ObjectId(id);
 
-      const result = await db.collection<Book>("books").deleteOne({
-        _id: new ObjectId(id),
-        addedBy: req.user.id,
-      });
+      const existingBook = await db
+        .collection<Book>(BOOK_COLLECTION)
+        .findOne({
+          _id: bookId,
+          addedBy: req.user.id,
+        });
+
+      if (!existingBook) {
+        res.status(404).json({
+          success: false,
+          message: "Book not found or you are not the owner",
+        });
+        return;
+      }
+
+      const activeBorrow = await db
+        .collection<Borrow>(BORROW_COLLECTION)
+        .findOne({
+          bookId,
+          status: "active",
+        });
+
+      if (activeBorrow) {
+        res.status(409).json({
+          success: false,
+          message: "This book cannot be deleted while it has active borrows",
+        });
+        return;
+      }
+
+      const result = await db
+        .collection<Book>(BOOK_COLLECTION)
+        .deleteOne({
+          _id: bookId,
+          addedBy: req.user.id,
+        });
 
       if (result.deletedCount === 0) {
         res.status(404).json({
