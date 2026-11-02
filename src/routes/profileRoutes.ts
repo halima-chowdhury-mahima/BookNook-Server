@@ -1,5 +1,10 @@
 
-import { Router, Request, Response } from "express";
+import {
+  Router,
+  Request,
+  Response,
+  NextFunction,
+} from "express";
 import multer from "multer";
 import { Readable } from "stream";
 import { v2 as cloudinary } from "cloudinary";
@@ -9,6 +14,14 @@ import { verifyToken } from "../middleware/authMiddleware.js";
 
 const router = Router();
 
+interface ProfileImage {
+  userId: string;
+  imageUrl: string;
+  publicId: string;
+  updatedAt: Date;
+}
+
+// Multer configuration
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -22,7 +35,9 @@ const upload = multer({
     ];
 
     if (!allowedTypes.includes(file.mimetype)) {
-      callback(new Error("Only JPG, PNG and WebP images are allowed."));
+      callback(
+        new Error("Only JPG, PNG and WebP images are allowed.")
+      );
       return;
     }
 
@@ -30,14 +45,44 @@ const upload = multer({
   },
 });
 
-interface ProfileImage {
-  userId: string;
-  imageUrl: string;
-  publicId: string;
-  updatedAt: Date;
+// Handle Multer errors before reaching the upload route
+function handleAvatarUpload(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  upload.single("avatar")(req, res, (error: unknown) => {
+    if (!error) {
+      next();
+      return;
+    }
+
+    if (error instanceof multer.MulterError) {
+      const message =
+        error.code === "LIMIT_FILE_SIZE"
+          ? "Image size must not exceed 5MB."
+          : "Invalid image upload.";
+
+      res.status(400).json({
+        success: false,
+        message,
+      });
+
+      return;
+    }
+
+    res.status(400).json({
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Invalid image upload.",
+    });
+  });
 }
 
-function configureCloudinary() {
+// Configure Cloudinary
+function configureCloudinary(): void {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
@@ -53,12 +98,15 @@ function configureCloudinary() {
   });
 }
 
-function uploadImage(buffer: Buffer): Promise<{
+// Upload image to Cloudinary
+function uploadImage(
+  buffer: Buffer
+): Promise<{
   secure_url: string;
   public_id: string;
 }> {
   return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
+    const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder: "booknook/profiles",
         resource_type: "image",
@@ -77,7 +125,12 @@ function uploadImage(buffer: Buffer): Promise<{
       }
     );
 
-    Readable.from(buffer).pipe(stream);
+    const readable = Readable.from([buffer]);
+
+    readable.on("error", reject);
+    uploadStream.on("error", reject);
+
+    readable.pipe(uploadStream);
   });
 }
 
@@ -120,9 +173,10 @@ router.get(
 router.post(
   "/avatar",
   verifyToken,
-  upload.single("avatar"),
+  handleAvatarUpload,
   async (req: Request, res: Response) => {
     let uploadedPublicId: string | undefined;
+    let profileSaved = false;
 
     try {
       const userId = req.user?.id;
@@ -167,9 +221,22 @@ router.post(
         { upsert: true }
       );
 
-      // Delete previous custom image after successful replacement
-      if (oldProfile?.publicId) {
-        await cloudinary.uploader.destroy(oldProfile.publicId);
+      // Database successfully saved the new image
+      profileSaved = true;
+
+      // Delete old image without affecting the new image
+      if (
+        oldProfile?.publicId &&
+        oldProfile.publicId !== uploaded.public_id
+      ) {
+        try {
+          await cloudinary.uploader.destroy(oldProfile.publicId);
+        } catch (deleteError) {
+          console.error(
+            "Old profile image cleanup error:",
+            deleteError
+          );
+        }
       }
 
       res.status(200).json({
@@ -178,13 +245,16 @@ router.post(
         data: newProfile,
       });
     } catch (error) {
-      // Remove newly uploaded image if saving failed
-      if (uploadedPublicId) {
+      // Clean up the new image only if database saving failed
+      if (uploadedPublicId && !profileSaved) {
         try {
           configureCloudinary();
           await cloudinary.uploader.destroy(uploadedPublicId);
         } catch (deleteError) {
-          console.error("Cloudinary cleanup error:", deleteError);
+          console.error(
+            "Cloudinary cleanup error:",
+            deleteError
+          );
         }
       }
 
@@ -229,11 +299,20 @@ router.delete(
         return;
       }
 
-      if (profile.publicId) {
-        await cloudinary.uploader.destroy(profile.publicId);
-      }
-
+      // Remove database reference first
       await collection.deleteOne({ userId });
+
+      // Cloudinary cleanup is best-effort
+      if (profile.publicId) {
+        try {
+          await cloudinary.uploader.destroy(profile.publicId);
+        } catch (deleteError) {
+          console.error(
+            "Cloudinary image deletion error:",
+            deleteError
+          );
+        }
+      }
 
       res.status(200).json({
         success: true,
