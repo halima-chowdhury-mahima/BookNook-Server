@@ -1,8 +1,8 @@
 {
   "name": "booknook-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "BookNook Backend Server",
+  "main": "dist/server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx watch src/server.ts",
@@ -28,6 +28,6 @@
     "@types/express": "^5.0.6",
     "@types/multer": "^2.3.0",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   }
 }
