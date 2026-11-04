@@ -14,14 +14,29 @@ dotenv.config();
 const app = express();
 
 // Middleware
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  ...(process.env.CLIENT_URL || "")
+    .split(",")
+    .map((url) => url.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: (origin, callback) => {
+      const normalizedOrigin = origin?.replace(/\/$/, "");
+
+      if (!origin || allowedOrigins.includes(normalizedOrigin!)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    },
     credentials: true,
   })
 );
-
-app.use(express.json());
 
 // Welcome route
 app.get("/", (_req, res) => {
