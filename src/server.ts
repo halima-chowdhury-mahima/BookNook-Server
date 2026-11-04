@@ -1,3 +1,4 @@
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -13,7 +14,9 @@ dotenv.config();
 
 const app = express();
 
-// Middleware
+// ==========================================
+// MIDDLEWARE
+// ==========================================
 
 const allowedOrigins = [
   "http://localhost:3000",
@@ -23,6 +26,7 @@ const allowedOrigins = [
     .filter(Boolean),
 ];
 
+// CORS Configuration
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -38,7 +42,14 @@ app.use(
   })
 );
 
-// Welcome route
+// IMPORTANT: Parse JSON and URL-encoded request bodies
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ==========================================
+// WELCOME ROUTE
+// ==========================================
+
 app.get("/", (_req, res) => {
   res.json({
     success: true,
@@ -46,7 +57,10 @@ app.get("/", (_req, res) => {
   });
 });
 
-// Connect MongoDB before database-dependent routes
+// ==========================================
+// DATABASE CONNECTION
+// ==========================================
+
 app.use(async (_req, _res, next) => {
   try {
     await connectDB();
@@ -56,7 +70,10 @@ app.use(async (_req, _res, next) => {
   }
 });
 
-// Health check
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+
 app.get("/api/health", async (_req, res) => {
   try {
     await getDB().command({ ping: 1 });
@@ -76,11 +93,17 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-// API Routes
+// ==========================================
+// API ROUTES
+// ==========================================
+
 app.use("/books", bookRoutes);
 app.use("/borrows", borrowRoutes);
 app.use("/google-books", googleBookRoutes);
 app.use("/profile", profileRoutes);
 
-// Export Express app for Vercel
+// ==========================================
+// EXPORT EXPRESS APP FOR VERCEL
+// ==========================================
+
 export default app;
