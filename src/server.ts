@@ -1,11 +1,10 @@
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import profileRoutes from "./routes/profileRoutes.js";
 
 import { connectDB, getDB } from "./config/db.js";
 
+import profileRoutes from "./routes/profileRoutes.js";
 import bookRoutes from "./routes/bookRoutes.js";
 import borrowRoutes from "./routes/borrowRoutes.js";
 import googleBookRoutes from "./routes/googleBookRoutes.js";
@@ -14,9 +13,7 @@ dotenv.config();
 
 const app = express();
 
-const PORT = process.env.PORT || 5000;
-
-// Middleware must run before API routes.
+// Middleware
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:3000",
@@ -32,6 +29,16 @@ app.get("/", (_req, res) => {
     success: true,
     message: "Welcome to BookNook API!",
   });
+});
+
+// Connect MongoDB before database-dependent routes
+app.use(async (_req, _res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Health check
@@ -59,21 +66,6 @@ app.use("/books", bookRoutes);
 app.use("/borrows", borrowRoutes);
 app.use("/google-books", googleBookRoutes);
 app.use("/profile", profileRoutes);
-// Start Server
-async function startServer() {
-  try {
-    await connectDB();
 
-    app.listen(PORT, () => {
-      console.log(`MongoDB Connected Successfully!`);
-      console.log(
-        `BookNook Server running at http://localhost:${PORT}`
-      );
-    });
-  } catch (error) {
-    console.error("Server startup failed:", error);
-    process.exit(1);
-  }
-}
-
-startServer();
+// Export Express app for Vercel
+export default app;

@@ -4,10 +4,11 @@
   "description": "BookNook Backend Server",
   "main": "dist/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js"
+  "test": "echo \"Error: no test specified\" && exit 1",
+  "dev": "tsx watch src/index.ts",
+  "build": "tsc",
+  "start": "node dist/index.js"
+
   },
   "keywords": [],
   "author": "",
